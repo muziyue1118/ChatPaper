@@ -66,6 +66,40 @@
 
 <h1 align="center">ChatPaper全流程加速科研：论文总结+专业级翻译+润色+审稿+审稿回复</h1>
 
+## 本仓库增强版说明
+
+本仓库基于公开项目 ChatPaper 做了面向“合法检索 + 可持续阅读工作流”的增强，重点解决原始流程中检索源较单一、非 Open Access 论文难以继续处理、跨来源筛选参数不统一，以及方法总结不够深入的问题。
+
+### 新增功能
+
+- 新增统一检索入口，`chat_paper.py` 现在支持 `--source {arxiv, ieee, sciencedirect, scopus, elsevier}`。
+- 新增 IEEE 官方 Metadata API 检索，以及 Elsevier 官方 `ScienceDirect + Scopus` 合法检索。
+- 新增 `elsevier` 聚合源，会自动合并 ScienceDirect 和 Scopus 结果，并优先保留更适合后续下载与阅读的记录。
+- 新增合规下载策略，远程检索阶段只自动下载明确标记为 Open Access 的 PDF；非 OA 或 OA 状态不明确的论文会进入待读清单，不会尝试绕过机构权限。
+- 新增双导出结果，每次远程检索都会生成 `*-summary.md` 和 `*-reading-list.md`，方便区分“已自动总结”与“需要手动补充下载”的论文。
+- 新增本地 PDF 接续工作流，手动从学校或出版社合法下载的 PDF 可以继续通过 `--pdf_path` 直接总结。
+- 新增统一时间窗参数 `--days_from` 和 `--days/--days_to`，支持“最近 7 天”或“3 到 30 天前”这类筛选。
+- 新增统一分页参数 `--page_num`，让 IEEE / Elsevier / arXiv 都能使用一致的翻页方式。
+- 新增强化后的总结 prompt，会更详细地解释每篇论文的算法内容、模型结构、训练与推理流程，以及作者最有创新性的设计点。
+- 新增多源 API key 配置，支持在 `apikey.ini` 中填写 `[IEEE] API_KEY`、`[Elsevier] API_KEY`，也支持环境变量 `IEEE_API_KEY`、`ELSEVIER_API_KEY`。
+
+### 这次优化主要解决什么问题
+
+- 检索范围更完整：不再局限于 arXiv，适合先做公开预印本检索，再补 IEEE / Elsevier 的正式发表版本。
+- 工作流更统一：同一条 `chat_paper.py` 命令可以复用来源、时间窗、分页、关键词过滤等参数，减少不同脚本之间切换的心智负担。
+- 合规性更稳妥：只通过官方 API 做检索，只对明确 OA 的论文自动下载，避免把项目流程建立在灰色抓取或机构会话复用上。
+- 阅读接续更自然：对暂时拿不到全文的论文，脚本会保留 DOI、落地页、摘要和建议文件名，方便后续通过学校权限手动下载后继续总结。
+- 总结质量更高：`Methods` 和 `Summary` 的 prompt 已强化为“讲清楚模型结构、模块交互、训练目标、训练/推理流程，并单独深挖最核心创新点”，更适合用来做组会速读和方法对比。
+- 结果管理更清晰：远程下载目录会按 `source-query-date` 自动分开，避免不同来源、不同关键词的 PDF 混在一起。
+- 容错体验更好：当某个 provider 缺少 API key、返回 401/403/429 或网络超时时，程序会保留已有结果并继续输出 reading list，而不是整次任务直接中断。
+
+### 推荐使用场景
+
+- 想先看近一段时间某个方向在 arXiv、IEEE、Elsevier 都有哪些新工作。
+- 想先合法拿到论文元数据，再把非 OA 的文章交给学校订阅或手动下载处理。
+- 想把“自动检索、自动下载 OA、手动补全文、继续总结”串成一个连续流程。
+- 想让方法总结不只停留在摘要复述，而是更关注算法细节、模型结构和创新点。
+
 |工具名称|工具作用|是否在线？|在线预览|备注|
 |:-|:-|:-|:-|:-|
 |ChatPaper|通过ChatGPT实现对**论文进行总结，帮助科研人进行论文初筛**|访问[chatpaper.org](https://chatpaper.org/) 使用|![F LJTRX$DNFU`KR M7{E6Q](https://github.com/kaixindelele/ChatPaper/assets/28528386/ceda14e8-7330-40d2-859e-0d39d99a2dfb) |[原项目地址](https://github.com/kaixindelele/ChatPaper)|
@@ -244,7 +278,43 @@ python chat_paper.py --pdf_path "demo.pdf"
 python chat_paper.py --pdf_path "your_absolute_path"
 ```
 
-4.6. 谷歌学术论文整理： 运行google_scholar_spider.py， 比如：
+4.6. IEEE 合法检索 + Open Access 自动下载 + 总结： 运行chat_paper.py，比如：
+```python
+python chat_paper.py --source ieee --query "brain computer interface" --filter_keys "brain interface" --max_results 3
+```
+
+如果你想翻到后一页结果，可以继续加 `--page_num`。这里的 `page_num` 是统一检索层里的“过滤后页码”，从 `1` 开始计数：
+```python
+python chat_paper.py --source ieee --query "EEG emotion recognition" --page_num 2 --max_results 10 --language zh
+python chat_paper.py --source elsevier --query "EEG emotion recognition" --page_num 3 --max_results 20 --language zh
+```
+
+如果你只想看最近几天的工作，可以直接加 `--days`；如果你想限定一个区间，可以同时加 `--days_from` 和 `--days`（也就是 `--days_to`）：
+```python
+python chat_paper.py --source ieee --query "EEG emotion recognition" --days 7 --max_results 10 --language zh
+python chat_paper.py --source ieee --query "EEG emotion recognition" --days_from 3 --days 30 --max_results 10 --language zh
+```
+
+4.7. Elsevier 官方检索（ScienceDirect + Scopus 聚合）+ Open Access 自动下载 + 总结： 运行chat_paper.py，比如：
+```python
+python chat_paper.py --source elsevier --query "emotion recognition EEG" --filter_keys "emotion EEG" --max_results 3
+```
+
+4.8. 只导出 IEEE / Elsevier 待读清单，不自动下载 PDF： 运行chat_paper.py，比如：
+```python
+python chat_paper.py --source ieee --query "brain computer interface" --filter_keys "brain interface" --max_results 5 --download_policy metadata_only
+```
+
+说明：
+- 在 `apikey.ini` 中新增了 `[IEEE] API_KEY` 和 `[Elsevier] API_KEY`，也支持使用环境变量 `IEEE_API_KEY` / `ELSEVIER_API_KEY`。
+- 远程检索会生成两个导出文件：`*-summary.md`（仅包含成功下载并总结的 OA 论文）和 `*-reading-list.md`（包含未下载条目的题录、摘要、DOI、落地页和建议文件名）。
+- 对非 Open Access 或 OA 状态不明确的论文，脚本不会尝试绕过机构权限下载全文。你可以先用待读清单定位文章，再通过学校或个人合法权限手动下载 PDF，然后继续运行：
+
+```python
+python chat_paper.py --pdf_path "your_downloaded_pdf_or_folder"
+```
+
+4.9. 谷歌学术论文整理： 运行google_scholar_spider.py， 比如：
 
 ```
 python google_scholar_spider.py --kw "deep learning" --nresults 30 --csvpath "./data" --sortby "cit/year" --plotresults 1

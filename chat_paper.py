@@ -2,24 +2,107 @@ import argparse
 import base64
 import configparser
 import datetime
+import io
 import json
 import os
 import re
 from collections import namedtuple
 
-import arxiv
-import numpy as np
-import openai
+try:
+    import arxiv
+except ImportError:
+    arxiv = None
+try:
+    import openai
+except ImportError:
+    openai = None
 import requests
-import tenacity
-import tiktoken
+try:
+    import tenacity
+except ImportError:
+    class _TenacityShim:
+        @staticmethod
+        def retry(*args, **kwargs):
+            def decorator(func):
+                return func
+            return decorator
 
-import fitz, io, os
-from PIL import Image
+        @staticmethod
+        def wait_exponential(*args, **kwargs):
+            return None
+
+        @staticmethod
+        def stop_after_attempt(*args, **kwargs):
+            return None
+
+    tenacity = _TenacityShim()
+try:
+    import tiktoken
+except ImportError:
+    tiktoken = None
+try:
+    import fitz
+except ImportError:
+    fitz = None
+try:
+    from PIL import Image
+except ImportError:
+    Image = None
+
+from paper_sources import (
+    download_candidate_pdf,
+    partition_candidates,
+    render_reading_list_markdown,
+    sanitize_filename,
+    search_papers,
+)
+
+
+PaperParams = namedtuple(
+    "PaperParams",
+    [
+        "pdf_path",
+        "query",
+        "key_word",
+        "filter_keys",
+        "page_num",
+        "max_results",
+        "sort",
+        "save_image",
+        "file_format",
+        "language",
+        "source",
+        "download_policy",
+        "days_from",
+        "days_to",
+    ],
+)
+PaperParams.__new__.__defaults__ = (
+    '',
+    'all: ChatGPT robot',
+    'EEG emotion decoding, EEG foundation models, EEG decoding, time-series analysis, contrastive learning, transfer learning, knowledge distillation, domain adaptation, domain generalization',
+    'ChatGPT robot',
+    1,
+    1,
+    'Relevance',
+    False,
+    'md',
+    'zh',
+    'arxiv',
+    'oa_only',
+    0,
+    None,
+)
+
+
+def ensure_dependency(module_obj, package_name, feature_name):
+    if module_obj is None:
+        raise RuntimeError(f"{feature_name} requires the '{package_name}' package. Please install requirements.txt first.")
 
 
 class Paper:
     def __init__(self, path, title='', url='', abs='', authers=[]):
+        ensure_dependency(fitz, "PyMuPDF", "PDF parsing")
         # 初始化函数，根据pdf路径初始化Paper对象                
         self.url = url           # 文章链接
         self.path = path          # pdf路径
@@ -284,11 +367,12 @@ class Reader:
     def __init__(self, key_word, query, filter_keys,
                  root_path='./',
                  gitee_key='',
-                 sort=arxiv.SortCriterion.SubmittedDate, user_name='defualt', args=None):
+                 sort=None, user_name='defualt', args=None):
         self.user_name = user_name  # 读者姓名
         self.key_word = key_word  # 读者感兴趣的关键词
         self.query = query  # 读者输入的搜索查询
         self.sort = sort  # 读者选择的排序方式
+        self.args = args
         if args.language == 'en':
             self.language = 'English'
         elif args.language == 'zh':
@@ -327,7 +411,10 @@ class Reader:
         else:
             self.gitee_key = ''
         self.max_token_num = 4096
-        self.encoding = tiktoken.get_encoding("gpt2")
+        self.encoding = tiktoken.get_encoding("gpt2") if tiktoken is not None else None
+        self.source = getattr(args, "source", "arxiv")
+        self.download_policy = getattr(args, "download_policy", "oa_only")
+        self.export_stem = self.build_export_stem(args)
 
     def get_arxiv(self, max_results=30):
         search = arxiv.Search(query=self.query,
@@ -369,6 +456,29 @@ class Reader:
         rstr = r"[\/\\\:\*\?\"\<\>\|]"  # '/ \ : * ? " < > |'
         new_title = re.sub(rstr, "_", title)  # 替换为下划线
         return new_title
+
+    def build_export_stem(self, args):
+        pdf_path = getattr(args, "pdf_path", "")
+        if pdf_path:
+            normalized = os.path.normpath(pdf_path)
+            base_name = os.path.basename(normalized.rstrip("\\/"))
+            if normalized.lower().endswith(".pdf"):
+                base_name = os.path.splitext(base_name)[0]
+            return self.validateTitle(base_name[:80] or "local-pdf")
+        query = getattr(args, "query", "") or "papers"
+        source = getattr(args, "source", "arxiv") or "arxiv"
+        return self.validateTitle(f"{source}-{query}"[:120])
+
+    def ensure_export_path(self):
+        export_path = os.path.join(self.root_path, 'export')
+        os.makedirs(export_path, exist_ok=True)
+        return export_path
+
+    def make_export_file_name(self, suffix='', extension=None):
+        extension = extension or self.file_format
+        date_str = str(datetime.datetime.now())[:13].replace(' ', '-')
+        export_path = self.ensure_export_path()
+        return os.path.join(export_path, f"{date_str}-{self.export_stem}{suffix}.{extension}")
 
     def download_pdf(self, filter_results):
         # 先创建文件夹
@@ -506,12 +616,13 @@ class Reader:
             return self.build_summary_source_text(paper)
         return "".join(parts)
 
-    def summary_with_chat(self, paper_list):
+    def summary_with_chat(self, paper_list, file_name=None):
+        file_name = file_name or self.make_export_file_name()
+        if not paper_list:
+            self.export_to_markdown("# Summary\n\nNo papers were summarized in this run.\n", file_name=file_name, mode='w')
+            print("summary_saved_to:", file_name)
+            return file_name
         htmls = []
-        date_str = str(datetime.datetime.now())[:13].replace(' ', '-')
-        export_path = os.path.join(self.root_path, 'export')
-        if not os.path.exists(export_path):
-            os.makedirs(export_path)
         for paper_index, paper in enumerate(paper_list):
             # 第一步先用title，abs，和introduction进行总结。
             text = self.build_summary_source_text(paper)
@@ -602,13 +713,11 @@ class Reader:
 
             # # 整合成一个文件，打包保存下来。
             mode = 'w' if paper_index == 0 else 'a'
-            file_name = os.path.join(export_path,
-                                     date_str + '-' + self.validateTitle(paper.title[:80]) + "." + self.file_format)
             self.export_to_markdown("\n".join(htmls), file_name=file_name, mode=mode)
-
-            # file_name = os.path.join(export_path, date_str+'-'+self.validateTitle(paper.title)+".md")
-            # self.export_to_markdown("\n".join(htmls), file_name=file_name, mode=mode)
             htmls = []
+
+        print("summary_saved_to:", file_name)
+        return file_name
 
     @tenacity.retry(wait=tenacity.wait_exponential(multiplier=1, min=4, max=10),
                     stop=tenacity.stop_after_attempt(5),
@@ -820,16 +929,23 @@ class Reader:
         print(f"Key word: {self.key_word}")
         print(f"Query: {self.query}")
         print(f"Sort: {self.sort}")
+        print(f"Source: {self.source}")
+        print(f"Download policy: {self.download_policy}")
+        print(f"Page number: {getattr(self.args, 'page_num', 1)}")
+        print(f"Days window: {getattr(self.args, 'days_from', 0)} to {getattr(self.args, 'days_to', None)}")
 
 
 def chat_paper_main(args):
     # 创建一个Reader对象，并调用show_info方法
-    if args.sort == 'Relevance':
-        sort = arxiv.SortCriterion.Relevance
-    elif args.sort == 'LastUpdatedDate':
-        sort = arxiv.SortCriterion.LastUpdatedDate
+    if arxiv is not None:
+        if args.sort == 'Relevance':
+            sort = arxiv.SortCriterion.Relevance
+        elif args.sort == 'LastUpdatedDate':
+            sort = arxiv.SortCriterion.LastUpdatedDate
+        else:
+            sort = arxiv.SortCriterion.Relevance
     else:
-        sort = arxiv.SortCriterion.Relevance
+        sort = None
 
     if args.pdf_path:
         reader1 = Reader(key_word=args.key_word,
@@ -861,14 +977,88 @@ def chat_paper_main(args):
                          args=args
                          )
         reader1.show_info()
-        filter_results = reader1.filter_arxiv(max_results=args.max_results)
-        paper_list = reader1.download_pdf(filter_results)
-        reader1.summary_with_chat(paper_list=paper_list)
+        source_response = search_papers(
+            source=args.source,
+            query=args.query,
+            max_results=args.max_results,
+            filter_keys=args.filter_keys,
+            page_num=args.page_num,
+            days_from=args.days_from,
+            days_to=args.days_to,
+            sort=sort,
+            ieee_api_key=load_optional_api_key(reader1.config, "IEEE", "API_KEY", "IEEE_API_KEY"),
+            elsevier_api_key=load_optional_api_key(reader1.config, "Elsevier", "API_KEY", "ELSEVIER_API_KEY"),
+        )
+        for error in source_response.errors:
+            print("source_error:", error)
+        if not source_response.candidates:
+            print("No candidates found for source:", args.source)
+
+        downloadable_candidates, reading_candidates = partition_candidates(
+            source_response.candidates,
+            args.download_policy,
+        )
+        download_dir = build_remote_download_dir(reader1.root_path, args.source, args.query)
+        paper_list = []
+        failed_downloads = []
+        for candidate in downloadable_candidates:
+            try:
+                file_path = download_candidate_pdf(candidate, download_dir)
+                paper = Paper(
+                    path=file_path,
+                    url=candidate.landing_url,
+                    title=candidate.title,
+                    abs=candidate.abstract,
+                    authers=candidate.authors,
+                )
+                paper.parse_pdf()
+                paper_list.append(paper)
+                print("downloaded_pdf:", file_path)
+            except Exception as e:
+                print("download_candidate_error:", candidate.title, e)
+                failed_downloads.append(candidate)
+
+        summary_path = reader1.make_export_file_name(suffix='-summary')
+        reading_list_path = reader1.make_export_file_name(suffix='-reading-list', extension='md')
+        if paper_list:
+            reader1.summary_with_chat(paper_list=paper_list, file_name=summary_path)
+        else:
+            reader1.export_to_markdown(
+                "# Summary\n\nNo open-access PDFs were downloaded in this run.\n",
+                file_name=summary_path,
+                mode='w',
+            )
+            print("summary_saved_to:", summary_path)
+
+        reading_markdown = render_reading_list_markdown(
+            reading_candidates + failed_downloads,
+            errors=source_response.errors,
+            heading="Reading List",
+        )
+        reader1.export_to_markdown(reading_markdown, file_name=reading_list_path, mode='w')
+        print("reading_list_saved_to:", reading_list_path)
+
+
+def load_optional_api_key(config, section, option, env_name):
+    env_value = os.environ.get(env_name, "").strip()
+    if env_value:
+        return env_value
+    if config.has_section(section) and config.has_option(section, option):
+        return config.get(section, option).strip()
+    return ""
+
+
+def build_remote_download_dir(root_path, source, query):
+    date_str = str(datetime.datetime.now())[:13].replace(' ', '-')
+    folder_name = f"{source}-{sanitize_filename(query, default='papers')[:60]}-{date_str}"
+    path = os.path.join(root_path, "pdf_files", folder_name)
+    os.makedirs(path, exist_ok=True)
+    return path
 
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument("--pdf_path", type=str, default=r'demo.pdf', help="if none, the bot will download from arxiv with query")
+    parser.add_argument("--pdf_path", type=str, default='', help="if none, the bot will download from the selected source with query")
     # parser.add_argument("--pdf_path", type=str, default=r'C:\Users\Administrator\Desktop\DHER\RHER_Reset\ChatPaper', help="if none, the bot will download from arxiv with query")
     # parser.add_argument("--pdf_path", type=str, default='', help="if none, the bot will download from arxiv with query")
     parser.add_argument("--query", type=str, default='all: ChatGPT robot',
@@ -877,13 +1067,25 @@ if __name__ == '__main__':
                         help="the key word of user research fields")
     parser.add_argument("--filter_keys", type=str, default='ChatGPT robot',
                         help="the filter key words, 摘要中每个单词都得有，才会被筛选为目标论文")
+    parser.add_argument("--page_num", type=int, default=1,
+                        help="1-based page number after unified filtering; for example --page_num 2 returns the second page of results")
     parser.add_argument("--max_results", type=int, default=1, help="the maximum number of results")
     # arxiv.SortCriterion.Relevance
     parser.add_argument("--sort", type=str, default="Relevance", help="another is LastUpdatedDate")
     parser.add_argument("--save_image", default=False,
                         help="save image? It takes a minute or two to save a picture! But pretty")
     parser.add_argument("--file_format", type=str, default='md', help="导出的文件格式，如果存图片的话，最好是md，如果不是的话，txt的不会乱")
-    parser.add_argument("--language", type=str, default='zh', help="The other output lauguage is English, is en")    
+    parser.add_argument("--language", type=str, default='zh', help="The other output lauguage is English, is en")
+    parser.add_argument("--source", type=str, default='arxiv',
+                        choices=['arxiv', 'ieee', 'sciencedirect', 'scopus', 'elsevier'],
+                        help="remote source for paper search")
+    parser.add_argument("--download_policy", type=str, default='oa_only',
+                        choices=['oa_only', 'metadata_only'],
+                        help="oa_only downloads only explicit OA PDFs; metadata_only exports reading list only")
+    parser.add_argument("--days_from", type=int, default=0,
+                        help="nearest boundary in days ago; 0 means today")
+    parser.add_argument("--days", "--days_to", dest="days_to", type=int, default=None,
+                        help="farthest boundary in days ago; for example --days 7 means papers from the last 7 days")
     import time
 
     start_time = time.time()
