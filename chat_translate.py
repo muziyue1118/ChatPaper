@@ -57,9 +57,9 @@ def chat_translate_part(text, key, title=False, domain="", tokenizer_gpt35=None,
     if title:
         messages = [
             {"role": "system",
-                "content": "You are now a professional Science and technology editor"},
+                "content": "You are now a professional scientific editor and translator specializing in EEG emotion decoding, EEG foundation models, general EEG decoding, time-series analysis, contrastive learning, transfer learning, knowledge distillation, domain adaptation, and domain generalization."},
             {"role": "assistant",
-                "content": "Your task now is to translate title of the paper, the paper is about "+ domain},
+                "content": "Your task now is to translate the title of the paper. The paper is about " + domain + ". Keep EEG, BCI, dataset names, model names, and other technical terms accurate."},
             {"role": "user", "content": "Input Contents:" + text +                
                 
                 """
@@ -79,9 +79,9 @@ def chat_translate_part(text, key, title=False, domain="", tokenizer_gpt35=None,
     else:
         messages = [
             {"role": "system",
-                "content": "You are a professional academic paper translator."},
+                "content": "You are a professional academic paper translator specializing in EEG emotion decoding, EEG foundation models, general EEG decoding, time-series analysis, contrastive learning, transfer learning, knowledge distillation, domain adaptation, and domain generalization."},
             {"role": "assistant",
-                "content": "Your task now is to {} the Input Contents, which a section, part of a paper, the paper is about {}".format(task, domain)},
+                "content": "Your task now is to {} the input contents, which are a section of an academic paper. The paper is about {}. Keep technical terms, dataset names, evaluation protocols, and model names precise and readable for EEG/time-series researchers.".format(task, domain)},
             {"role": "user", "content": f"""
                 你的任务是口语化{task}输入的论文章节，{task}的内容要遵循下面的要求：
                 1. 在保证术语严谨的同时，文字表述需要更加口语化。
@@ -116,11 +116,13 @@ def chat_translate_part(text, key, title=False, domain="", tokenizer_gpt35=None,
     print("prompt_token_used:", response.usage.prompt_tokens,
             "completion_token_used:", response.usage.completion_tokens,
             "total_token_used:", response.usage.total_tokens)
-    print("response_time:", response.response_ms / 1000.0, 's')
+        response_ms = getattr(response, "response_ms", None)
+        if response_ms is not None:
+            print("response_time:", response_ms / 1000.0, 's')
     info = {}
     info['result'] = result
     info['token_used'] = response.usage.total_tokens
-    info['response_time'] = response.response_ms / 1000.0
+        info['response_time'] = response_ms / 1000.0 if response_ms is not None else None
     return info
 
 @tenacity.retry(wait=tenacity.wait_exponential(multiplier=1, min=4, max=10),
@@ -130,9 +132,9 @@ def chat_check_domain(text, key):
     openai.api_key = key
     messages = [
             {"role": "system",
-                "content": "You are now a professional Science and technology editor"},
+                "content": "You are now a professional scientific editor with strong background in EEG and machine learning literature."},
             {"role": "assistant",
-                "content": "Your task is to judge the subject and domain of the paper based on the title and abstract of the paper, and your output should not exceed five words!"},
+                "content": "Your task is to judge the subject and domain of the paper based on its title and abstract. Prefer concise research labels that are useful for EEG and time-series papers, and do not exceed five words."},
             {"role": "user", "content": "Input Contents:" + text},
         ]
     response = openai.ChatCompletion.create(
@@ -147,11 +149,13 @@ def chat_check_domain(text, key):
     print("prompt_token_used:", response.usage.prompt_tokens,
             "completion_token_used:", response.usage.completion_tokens,
             "total_token_used:", response.usage.total_tokens)
-    print("response_time:", response.response_ms / 1000.0, 's')
+        response_ms = getattr(response, "response_ms", None)
+        if response_ms is not None:
+            print("response_time:", response_ms / 1000.0, 's')
     info = {}
     info['result'] = result
     info['token_used'] = response.usage.total_tokens
-    info['response_time'] = response.response_ms / 1000.0
+        info['response_time'] = response_ms / 1000.0 if response_ms is not None else None
     return info
 
 def main(root_path, pdf_path, base_url, key, task="翻译"):

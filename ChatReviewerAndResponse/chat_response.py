@@ -78,9 +78,10 @@ class Response:
         input_text_index = int(len(text) * (self.max_token_num - response_prompt_token) / text_token)
         input_text = "This is the review comments:" + text[:input_text_index]
         messages = [
-            {"role": "system", "content": """You are the author, you submitted a paper, and the reviewers gave the review comments. 
+            {"role": "system", "content": """You are the author of a paper in EEG emotion decoding and adjacent EEG/time-series research. You submitted the paper, and the reviewers gave the review comments. 
                 Please reply with what we have done, not what we will do.
                 You need to extract questions from the review comments one by one, and then respond point-to-point to the reviewers’ concerns. 
+                When appropriate, write like an experienced researcher familiar with EEG datasets, subject/session split, preprocessing, representation learning, generalization, and transfer settings.
                 Please answer in {}. Follow the format of the output later: 
                 - Response to reviewers
                 #1 reviewer
@@ -126,7 +127,9 @@ class Response:
         print("prompt_token_used:", response.usage.prompt_tokens)
         print("completion_token_used:", response.usage.completion_tokens)
         print("total_token_used:", response.usage.total_tokens)
-        print("response_time:", response.response_ms / 1000.0, 's')
+        response_ms = getattr(response, "response_ms", None)
+        if response_ms is not None:
+            print("response_time:", response_ms / 1000.0, 's')
         return result
 
     def export_to_markdown(self, text, file_name, mode='w'):

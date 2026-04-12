@@ -27,7 +27,7 @@ class chatPaper:
         top_p: float = 1.0,
         model_name: str = "gpt-3.5-turbo",
         reply_count: int = 1,
-        system_prompt = "You are ChatPaper, A paper reading bot",
+        system_prompt = "You are ChatPaper, a paper reading bot specialized in EEG emotion decoding, EEG foundation models, EEG decoding, time-series analysis, contrastive learning, transfer learning, knowledge distillation, domain adaptation, and domain generalization.",
         lastAPICallTime = time.time()-100,
         apiTimeInterval = 20,
     ) -> None:
@@ -171,7 +171,7 @@ class chatPaper:
             headers={"Authorization": f"Bearer {self.get_api_key()}"},
             json={
                 "model": self.model_name,
-                "messages": [{"role": "system", "content": "You are a helpful assistant."},{"role": "user", "content": "print A"}],
+                "messages": [{"role": "system", "content": "You are a helpful assistant specialized in EEG and time-series research."},{"role": "user", "content": "print A"}],
                 "stream": True,
                 # kwargs
                 "temperature": self.temperature,

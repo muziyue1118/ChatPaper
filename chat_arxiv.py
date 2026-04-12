@@ -324,6 +324,7 @@ class Reader:
         OPENAI_KEY = os.environ.get("OPENAI_KEY", "")
         # 获取某个键对应的值
         openai.api_base = self.config.get('OpenAI', 'OPENAI_API_BASE')    
+        self.chatgpt_model = self.config.get('OpenAI', 'CHATGPT_MODEL')
         self.chat_api_list = self.config.get('OpenAI', 'OPENAI_API_KEYS')[1:-1].replace('\'', '').split(',')
         self.chat_api_list.append(OPENAI_KEY)
 
@@ -358,7 +359,13 @@ class Reader:
         # 创建一个空列表来存储论文链接
         links = []
         dates = []
-        response = requests.get(url)
+        try:
+            response = requests.get(url, timeout=20)
+            response.raise_for_status()
+        except requests.RequestException as e:
+            print("arXiv request failed:", e)
+            print("Please check whether this machine can access https://arxiv.org or whether a global proxy/VPN is required.")
+            return titles, links, dates
         soup = BeautifulSoup(response.text, "html.parser")
         articles = soup.find_all("li", class_="arxiv-result")  # 找到所有包含论文信息的li标签
         today = datetime.date.today()
@@ -398,6 +405,9 @@ class Reader:
             title_list.extend(titles)
             link_list.extend(links)
             date_list.extend(dates)
+        if not title_list:
+            print("No papers were collected from arXiv.")
+            print("Possible reasons: the query returned no recent results, arXiv is unreachable from this machine, or a proxy/VPN is needed.")
         print("-" * 40)
         return title_list, link_list, date_list
 
@@ -442,17 +452,76 @@ class Reader:
     def try_download_pdf(self, url, title):
         return self.download_pdf(url, title)
 
+    def get_section_text_by_keywords(self, paper, keywords, used_keys=None):
+        if used_keys is None:
+            used_keys = set()
+        for key, value in paper.section_text_dict.items():
+            if key in used_keys or not value:
+                continue
+            if any(keyword in key.lower() for keyword in keywords):
+                used_keys.add(key)
+                return key, value
+        return None, ""
+
+    def build_summary_source_text(self, paper):
+        parts = []
+        used_keys = set()
+
+        if paper.title:
+            parts.append("Title:" + paper.title)
+        if paper.url:
+            parts.append("Url:" + paper.url)
+
+        abstract_text = paper.abs or paper.section_text_dict.get("Abstract", "")
+        if abstract_text:
+            parts.append("Abstract:" + abstract_text)
+
+        paper_info = paper.section_text_dict.get("paper_info", "")
+        if paper_info:
+            parts.append("Paper_info:" + paper_info)
+
+        for label, keywords in [
+            ("Introduction", ("intro",)),
+            ("Experiments", ("experiment", "evaluation")),
+            ("Results", ("result", "finding", "discussion")),
+            ("Conclusion", ("conclu",)),
+        ]:
+            section_name, section_text = self.get_section_text_by_keywords(paper, keywords, used_keys)
+            if section_text:
+                parts.append(f"<{label}:{section_name}>:{section_text}")
+
+        return "".join(parts)
+
+    def build_method_source_text(self, paper):
+        parts = []
+        used_keys = set()
+
+        for label, keywords in [
+            ("Method", ("method", "approach", "framework", "architecture", "model", "pipeline")),
+            ("Experiments", ("experiment", "evaluation")),
+            ("Results", ("result", "finding", "discussion")),
+        ]:
+            section_name, section_text = self.get_section_text_by_keywords(paper, keywords, used_keys)
+            if section_text:
+                parts.append(f"<{label}:{section_name}>:{section_text}")
+
+        if not parts:
+            return self.build_summary_source_text(paper)
+        return "".join(parts)
+
     def summary_with_chat(self, paper_list):
         htmls = []
+        date_str = str(datetime.datetime.now())[:13].replace(' ', '-')
+        export_path = os.path.join(self.root_path, 'export')
+        if not os.path.exists(export_path):
+            os.makedirs(export_path)
+        file_name = os.path.join(
+            export_path,
+            date_str + '-' + self.validateTitle(self.query) + "." + self.file_format,
+        )
         for paper_index, paper in enumerate(paper_list):
             # 第一步先用title，abs，和introduction进行总结。
-            text = ''
-            text += 'Title:' + paper.title
-            text += 'Url:' + paper.url
-            text += 'Abstract:' + paper.abs
-            text += 'Paper_info:' + paper.section_text_dict['paper_info']
-            # intro
-            text += list(paper.section_text_dict.values())[0]
+            text = self.build_summary_source_text(paper)
             chat_summary_text = ""
             try:
                 chat_summary_text = self.chat_summary(text=text)
@@ -475,22 +544,14 @@ class Reader:
 
             # 第二步总结方法：
             # TODO，由于有些文章的方法章节名是算法名，所以简单的通过关键词来筛选，很难获取，后面需要用其他的方案去优化。
-            method_key = ''
-            for parse_key in paper.section_text_dict.keys():
-                if 'method' in parse_key.lower() or 'approach' in parse_key.lower():
-                    method_key = parse_key
-                    break
-            
             chat_method_text = ""
-            if method_key != '':
-                text = ''
-                method_text = ''
-                summary_text = ''
-                summary_text += "<summary>" + chat_summary_text
-                # methods                
-                method_text += paper.section_text_dict[method_key]
+            text = ''
+            method_text = ''
+            summary_text = ''
+            summary_text += "<summary>" + chat_summary_text
+            method_text += self.build_method_source_text(paper)
+            if method_text:
                 text = summary_text + "\n\n<Methods>:\n\n" + method_text
-                # chat_method_text = self.chat_method(text=text)
                 try:
                     chat_method_text = self.chat_method(text=text)
                 except Exception as e:
@@ -504,12 +565,8 @@ class Reader:
                         offset = int(str(e)[current_tokens_index:current_tokens_index + 4])
                         method_prompt_token = offset + 800 + 150
                         chat_method_text = self.chat_method(text=text, method_prompt_token=method_prompt_token)
-                
                 if "chat_method_text" in locals():
                     htmls.append(chat_method_text)
-                # htmls.append(chat_method_text)
-            else:
-                chat_method_text = ''
             htmls.append("\n" * 4)
 
             # 第三步总结全文，并打分：
@@ -550,13 +607,7 @@ class Reader:
             htmls.append("\n" * 4)
 
             # # 整合成一个文件，打包保存下来。
-            date_str = str(datetime.datetime.now())[:13].replace(' ', '-')
-            export_path = os.path.join(self.root_path, 'export')
-            if not os.path.exists(export_path):
-                os.makedirs(export_path)
             mode = 'w' if paper_index == 0 else 'a'
-            file_name = os.path.join(export_path,
-                                     date_str + '-' + self.validateTitle(self.query) + "." + self.file_format)
             self.export_to_markdown("\n".join(htmls), file_name=file_name, mode=mode)
             htmls = []
 
@@ -573,26 +624,31 @@ class Reader:
 
         messages = [
             {"role": "system",
-             "content": "You are a reviewer in the field of [" + self.key_word + "] and you need to critically review this article"},
+             "content": "You are a first-principles thinker and reviewer specializing in [" + self.key_word + "], with strong background in EEG emotion decoding, EEG foundation models, general EEG decoding, time-series modeling, contrastive learning, transfer learning, knowledge distillation, domain adaptation, and domain generalization. You critically review papers from basic principles, identify what truly solves the core problem, and judge whether the ideas can transfer to EEG emotion decoding."},
             # chatgpt 角色
             {"role": "assistant",
-             "content": "This is the <summary> and <conclusion> part of an English literature, where <summary> you have already summarized, but <conclusion> part, I need your help to summarize the following questions:" + clip_text},
+             "content": "This is the <summary> and <conclusion> part of an English paper. The <summary> has already been written. Please focus on the real contribution, limitations, first-principles assumptions, generalization value, and whether this work is useful for EEG emotion decoding or adjacent EEG/time-series research: " + clip_text},
             # 背景知识，可以参考OpenReview的审稿流程
             {"role": "user", "content": """                 
-                 8. Make the following summary.Be sure to use {} answers (proper nouns need to be marked in English).
-                    - (1):What is the significance of this piece of work?
-                    - (2):Summarize the strengths and weaknesses of this article in three dimensions: innovation point, performance, and workload.                   
-                    .......
+                 8. Make the following summary. Be sure to use {} answers (proper nouns need to be marked in English).
+                    - (1): What is the significance of this work for its original task or field? State the contribution from a first-principles perspective.
+                    - (2): Summarize the strengths and weaknesses of this article in four dimensions: innovation, empirical performance, robustness/generalization, and workload/reproducibility.
+                    - (3): Potential flaw: if I want to borrow this work for EEG emotion decoding, what are the main scenario limitations or failure cases? Consider subject shift, session shift, label scarcity, noise, missing modalities, dataset scale, distribution drift, and computational cost.
+                    - (4): Among the above limitations, which one is most worth digging into as a new paper, and why?
+                    - (5): Give a final recommendation for my research use: directly follow, selectively borrow, or only keep as background reading. State the most reusable idea and the motivating question clearly.
                  Follow the format of the output later: 
                  8. Conclusion: \n\n
-                    - (1):xxx;\n                     
-                    - (2):Innovation point: xxx; Performance: xxx; Workload: xxx;\n                      
+                    - (1) Significance: xxx;\n                     
+                    - (2) Strengths and Weaknesses: Innovation: xxx; Performance: xxx; Robustness/Generalization: xxx; Workload/Reproducibility: xxx;\n
+                    - (3) Potential Flaw: xxx;\n
+                    - (4) Best Paper Angle: xxx;\n
+                    - (5) Recommendation: xxx;\n
                  
-                 Be sure to use {} answers (proper nouns need to be marked in English), statements as concise and academic as possible, do not repeat the content of the previous <summary>, the value of the use of the original numbers, be sure to strictly follow the format, the corresponding content output to xxx, in accordance with \n line feed, ....... means fill in according to the actual requirements, if not, you can not write.                 
-                 """.format(self.language, self.language)},
+                  Be sure to use {} answers (proper nouns need to be marked in English), statements as concise and academic as possible, do not repeat the content of the previous <summary>, the value of the use of the original numbers, be sure to strictly follow the format, the corresponding content output to xxx, in accordance with \n line feed, ....... means fill in according to the actual requirements, if not, you can not write.                 
+                  """.format(self.language, self.language)},
         ]
         response = openai.ChatCompletion.create(
-            model="gpt-3.5-turbo",
+            model=self.chatgpt_model,
             # prompt需要用英语替换，少占用token。
             messages=messages,
         )
@@ -603,7 +659,9 @@ class Reader:
         print("prompt_token_used:", response.usage.prompt_tokens,
               "completion_token_used:", response.usage.completion_tokens,
               "total_token_used:", response.usage.total_tokens)
-        print("response_time:", response.response_ms / 1000.0, 's')
+        response_ms = getattr(response, "response_ms", None)
+        if response_ms is not None:
+            print("response_time:", response_ms / 1000.0, 's')
         return result
 
     @tenacity.retry(wait=tenacity.wait_exponential(multiplier=1, min=4, max=10),
@@ -618,29 +676,37 @@ class Reader:
         clip_text = text[:clip_text_index]
         messages = [
             {"role": "system",
-             "content": "You are a researcher in the field of [" + self.key_word + "] who is good at summarizing papers using concise statements"},
+             "content": "You are a first-principles thinker and researcher specializing in [" + self.key_word + "], with strong background in EEG emotion decoding, EEG foundation models, general EEG decoding, time-series modeling, contrastive learning, transfer learning, knowledge distillation, domain adaptation, and domain generalization. You are especially good at explaining methods in a detailed, teachable, reproducible, insight-centered, and architecture-aware way. When a paper proposes a novel model, you reconstruct the exact module interactions, the feature/information flow, the learning signals, and the deepest innovation mechanism rather than giving a surface-level summary."},
             # chatgpt 角色
             {"role": "assistant",
-             "content": "This is the <summary> and <Method> part of an English document, where <summary> you have summarized, but the <Methods> part, I need your help to read and summarize the following questions." + clip_text},
+             "content": "This is the <summary> and <Method> part of an English paper. The <summary> has already been written. Please explain the method in detail, including module-level design, branch interactions, feature/representation flow, training objective, optimization details, empirical support for each module, the insight-to-design mapping, the generalization design, and what can transfer to EEG emotion decoding. If one innovation is clearly the centerpiece, spend extra space explaining how it works internally and why it should outperform prior designs: " + clip_text},
             # 背景知识
             {"role": "user", "content": """                 
-                 7. Describe in detail the methodological idea of this article. Be sure to use {} answers (proper nouns need to be marked in English). For example, its steps are.
-                    - (1):...
-                    - (2):...
-                    - (3):...
-                    - .......
+                 7. Describe the methodological idea of this article in detail. Be sure to use {} answers (proper nouns need to be marked in English).
+                    - (1): What is the input form and preprocessing pipeline? Mention signal type, channel setup, segmentation/windowing, filtering, normalization, augmentation, label construction, and whether the representation is raw EEG, handcrafted features, time-frequency maps, graphs, multimodal features, or tokenized sequences when available.
+                    - (2): What is the full model architecture? Explain each important module one by one in forward-pass order, including what its input is, what transformation it performs, what output it produces, how it connects to the next module or branch, and why it is needed. If the paper uses tokens/patches/channels/nodes/temporal segments/multi-branch fusion, state that explicitly.
+                    - (3): What is the training objective and optimization strategy? Mention classification/regression losses, auxiliary losses, regularization, sampling strategy, augmentation strategy, optimizer/schedule if available, and whether contrastive learning, self-supervised learning, transfer learning, knowledge distillation, domain adaptation, or domain generalization is used.
+                    - (4): What is the complete method pipeline in ordered steps? Summarize it as clearly as possible in the form input -> preprocessing -> feature extraction -> fusion/encoding -> objective -> prediction, and explicitly separate training-time steps from inference-time steps if they differ.
+                    - (5): For each main novelty, explain it strictly in the form "[Problem solved] -> [Inspired by which insight] -> [Concrete design]". Also state whether it is an architectural, methodological, or training-strategy innovation. Then identify the single most important innovation and explain it in extra depth: what exact bottleneck of previous methods it targets, what internal structural or optimization change is introduced, how the information flow differs before and after this design, why that should improve performance/generalization/efficiency, and what evidence supports that claim.
+                    - (6): What training, inference, implementation, efficiency, or deployment details are mentioned? Include dataset split, batching, parameter/computational cost, latency, memory, hardware, reproducibility details, or missing practical details if the paper mentions them.
+                    - (7): What ablation, comparison, or empirical evidence shows that the proposed method design is necessary? Explain which module seems to contribute most, which evidence is the strongest, and whether the claimed mechanism is convincingly validated or still partly inferential.
+                    - (8): Which parts are most likely to transfer to EEG emotion decoding or cross-subject/session EEG generalization, and which assumptions may fail there?
                  Follow the format of the output that follows: 
                  7. Methods: \n\n
-                    - (1):xxx;\n 
-                    - (2):xxx;\n 
-                    - (3):xxx;\n  
-                    ....... \n\n     
+                    - (1) Input and Preprocessing: xxx;\n 
+                    - (2) Architecture and Module Interactions: xxx;\n 
+                    - (3) Objective and Optimization: xxx;\n  
+                    - (4) Ordered Pipeline: xxx;\n
+                    - (5) Novelty Mapping and Key Innovation Deep Dive: xxx;\n
+                    - (6) Implementation and Efficiency: xxx;\n
+                    - (7) Evidence for the Method: xxx;\n
+                    - (8) Transferability: xxx;\n\n
                  
-                 Be sure to use {} answers (proper nouns need to be marked in English), statements as concise and academic as possible, do not repeat the content of the previous <summary>, the value of the use of the original numbers, be sure to strictly follow the format, the corresponding content output to xxx, in accordance with \n line feed, ....... means fill in according to the actual requirements, if not, you can not write.                 
+                 Be sure to use {} answers (proper nouns need to be marked in English), keep the writing academic and compact but detailed enough to teach the method clearly, do not repeat the content of the previous <summary>, use original numerical values, say "not explicitly stated" when key implementation details are missing, do not use LaTeX, and strictly follow the format with markdown line breaks.                 
                  """.format(self.language, self.language)},
         ]
         response = openai.ChatCompletion.create(
-            model="gpt-3.5-turbo",
+            model=self.chatgpt_model,
             messages=messages,
         )
         result = ''
@@ -650,7 +716,9 @@ class Reader:
         print("prompt_token_used:", response.usage.prompt_tokens,
               "completion_token_used:", response.usage.completion_tokens,
               "total_token_used:", response.usage.total_tokens)
-        print("response_time:", response.response_ms / 1000.0, 's')
+        response_ms = getattr(response, "response_ms", None)
+        if response_ms is not None:
+            print("response_time:", response_ms / 1000.0, 's')
         return result
 
     @tenacity.retry(wait=tenacity.wait_exponential(multiplier=1, min=4, max=10),
@@ -665,20 +733,22 @@ class Reader:
         clip_text = text[:clip_text_index]
         messages = [
             {"role": "system",
-             "content": "You are a researcher in the field of [" + self.key_word + "] who is good at summarizing papers using concise statements"},
+             "content": "You are a first-principles thinker and researcher specializing in [" + self.key_word + "], with strong background in EEG emotion decoding, EEG foundation models, general EEG decoding, time-series modeling, contrastive learning, transfer learning, knowledge distillation, domain adaptation, and domain generalization. You summarize papers structurally, critically, and from basic principles, and you explicitly judge whether a paper is directly useful, partially transferable, or mainly inspirational for EEG emotion decoding. You also highlight the single most decision-relevant technical innovation instead of giving only a generic overview."},
             {"role": "assistant",
-             "content": "This is the title, author, link, abstract and introduction of an English document. I need your help to read and summarize the following questions: " + clip_text},
+             "content": "This is the title, author, link, abstract, introduction, results or experiments, and conclusion of an English paper. Please read it as a first-principles researcher deciding whether the paper is useful for EEG emotion decoding or adjacent EEG/time-series research, and identify not just what the paper claims, but which single innovation is most central and why: " + clip_text},
             {"role": "user", "content": """                 
                  1. Mark the title of the paper (with Chinese translation)
-                 2. list all the authors' names (use English)
-                 3. mark the first author's affiliation (output {} translation only)                 
-                 4. mark the keywords of this article (use English)
-                 5. link to the paper, Github code link (if available, fill in Github:None if not)
-                 6. summarize according to the following four points.Be sure to use {} answers (proper nouns need to be marked in English)
-                    - (1):What is the research background of this article?
-                    - (2):What are the past methods? What are the problems with them? Is the approach well motivated?
-                    - (3):What is the research methodology proposed in this paper?
-                    - (4):On what task and what performance is achieved by the methods in this paper? Can the performance support their goals?
+                 2. List all authors' names (use English)
+                 3. Mark the first author's affiliation (output {} translation only)
+                 4. Mark the keywords of this article (use English)
+                 5. Link to the paper and Github/code link (if available, fill in Github: None if not)
+                 6. Summarize according to the following six points. Be sure to use {} answers (proper nouns need to be marked in English)
+                    - (1): Task: What is the formal task definition of this paper? Clarify the input, output, optimization target, task setting, and how it relates to EEG emotion decoding, general EEG decoding, or adjacent time-series research.
+                    - (2): Challenge: What do representative previous methods struggle with on this task, and why do those limitations matter in practice?
+                    - (3): Insight and Novelty: What inspirations likely triggered the paper? What is the core insight? What novelties support that insight? For each main novelty, describe it as "[Problem solved] -> [Inspired by which insight] -> [Concrete design]". Explicitly identify the single most important innovation and explain in more detail what old bottleneck it fixes, what exact mechanism it adds or changes, and why that change should help.
+                    - (4): Evidence: What dataset, evaluation protocol, subject/session split, metrics, and main results are reported? Are the gains practically meaningful? Also mention which results most directly support the key innovation if the paper provides such evidence.
+                    - (5): Transfer Value: How useful is this paper for my research on EEG emotion decoding? State whether it is directly usable, partially transferable, or mainly inspirational, and explain the reusable part clearly.
+                    - (6): Motivation: Reconstruct the most natural first-principles path to the general idea, preferably as one or more question-style statements such as "Previous methods ..., so can we ...?"
                  Follow the format of the output that follows:                  
                  1. Title: xxx\n\n
                  2. Authors: xxx\n\n
@@ -686,17 +756,19 @@ class Reader:
                  4. Keywords: xxx\n\n   
                  5. Urls: xxx or xxx , xxx \n\n      
                  6. Summary: \n\n
-                    - (1):xxx;\n 
-                    - (2):xxx;\n 
-                    - (3):xxx;\n  
-                    - (4):xxx.\n\n     
+                    - (1) Task: xxx;\n 
+                    - (2) Challenge: xxx;\n 
+                    - (3) Insight and Novelty: xxx;\n
+                    - (4) Evidence: xxx;\n
+                    - (5) Transfer Value: xxx;\n
+                    - (6) Motivation: xxx.\n\n
                  
-                 Be sure to use {} answers (proper nouns need to be marked in English), statements as concise and academic as possible, do not have too much repetitive information, numerical values using the original numbers, be sure to strictly follow the format, the corresponding content output to xxx, in accordance with \n line feed.                 
+                 Be sure to use {} answers (proper nouns need to be marked in English), keep the writing academic and concise but give enough technical detail for item (3), do not have too much repetitive information, numerical values using the original numbers, do not use LaTeX, and strictly follow the format with markdown line breaks.                 
                  """.format(self.language, self.language, self.language)},
         ]
 
         response = openai.ChatCompletion.create(
-            model="gpt-3.5-turbo",
+            model=self.chatgpt_model,
             messages=messages,
         )
         result = ''
@@ -706,7 +778,9 @@ class Reader:
         print("prompt_token_used:", response.usage.prompt_tokens,
               "completion_token_used:", response.usage.completion_tokens,
               "total_token_used:", response.usage.total_tokens)
-        print("response_time:", response.response_ms / 1000.0, 's')
+        response_ms = getattr(response, "response_ms", None)
+        if response_ms is not None:
+            print("response_time:", response_ms / 1000.0, 's')
         return result
 
     def export_to_markdown(self, text, file_name, mode='w'):
@@ -729,6 +803,9 @@ def chat_arxiv_main(args):
                      )
     reader1.show_info()
     paper_list = reader1.get_arxiv_web(args=args, page_num=args.page_num, days=args.days)
+    if not paper_list:
+        print("No papers to summarize. Exiting early.")
+        return
 
     reader1.summary_with_chat(paper_list=paper_list)
 
@@ -736,7 +813,7 @@ def chat_arxiv_main(args):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument("--query", type=str, default='traffic flow prediction', help="the query string, ti: xx, au: xx, all: xx,")
-    parser.add_argument("--key_word", type=str, default='GPT robot', help="the key word of user research fields")
+    parser.add_argument("--key_word", type=str, default='EEG emotion decoding, EEG foundation models, EEG decoding, time-series analysis, contrastive learning, transfer learning, knowledge distillation, domain adaptation, domain generalization', help="the key word of user research fields")
     parser.add_argument("--page_num", type=int, default=2, help="the maximum number of page")
     parser.add_argument("--max_results", type=int, default=3, help="the maximum number of results")
     parser.add_argument("--days", type=int, default=10, help="the last days of arxiv papers of this query")

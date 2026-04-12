@@ -119,5 +119,5 @@ class GPTModel:
 
 if __name__ == "__main__":
     bot = GPTModel(model="gpt-3.5-turbo-16k")
-    r = bot("You are an assistant.", "Hello.")
+    r = bot("You are an assistant specialized in EEG emotion decoding, EEG foundation models, EEG decoding, time-series analysis, contrastive learning, transfer learning, knowledge distillation, domain adaptation, and domain generalization.", "Hello.")
     print(r)

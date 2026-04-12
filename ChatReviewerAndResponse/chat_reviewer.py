@@ -225,7 +225,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument("--paper_path", type=str, default='', help="path of papers")
     parser.add_argument("--file_format", type=str, default='txt', help="output file format")
-    parser.add_argument("--research_fields", type=str, default='computer science, artificial intelligence and reinforcement learning', help="the research fields of paper")
+    parser.add_argument("--research_fields", type=str, default='EEG emotion decoding, EEG foundation models, EEG decoding, time-series analysis, contrastive learning, transfer learning, knowledge distillation, domain adaptation, domain generalization', help="the research fields of paper")
     parser.add_argument("--language", type=str, default='en', help="output lauguage, en or zh")
     
     reviewer_args = ReviewerParams(**vars(parser.parse_args()))

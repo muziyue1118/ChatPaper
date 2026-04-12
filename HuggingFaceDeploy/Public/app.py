@@ -614,23 +614,26 @@ class Reader:
         clip_text = text[:clip_text_index]
         self.chatPaper.reset(
             convo_id="chatConclusion",
-            system_prompt="You are a reviewer in the field of [" +
-            self.key_word + "] and you need to critically review this article")
+            system_prompt="You are a reviewer specializing in [" +
+            self.key_word + "], with strong background in EEG emotion decoding, EEG foundation models, general EEG decoding, time-series modeling, contrastive learning, transfer learning, knowledge distillation, domain adaptation, and domain generalization. You need to critically review this article and judge whether its ideas can transfer to EEG emotion decoding.")
         self.chatPaper.add_to_conversation(
             convo_id="chatConclusion",
             role="assistant",
             message=
-            "This is the <summary> and <conclusion> part of an English literature, where <summary> you have already summarized, but <conclusion> part, I need your help to summarize the following questions:"
+            "This is the <summary> and <conclusion> part of an English paper. The <summary> has already been written. Please focus on the real contribution, limitations, generalization value, and whether this work is useful for EEG emotion decoding or adjacent EEG/time-series research: "
             + clip_text)  # 背景知识，可以参考OpenReview的审稿流程
         content = """                 
-                 8. Make the following summary.Be sure to use Chinese answers (proper nouns need to be marked in English).
-                    - (1):What is the significance of this piece of work?
-                    - (2):Summarize the strengths and weaknesses of this article in three dimensions: innovation point, performance, and workload.                   
-                    .......
+                 8. Make the following summary. Be sure to use Chinese answers (proper nouns need to be marked in English).
+                    - (1): What is the significance of this work for its original task or field?
+                    - (2): Summarize the strengths and weaknesses of this article in four dimensions: innovation, empirical performance, robustness/generalization, and workload/reproducibility.
+                    - (3): If I want to borrow this work for EEG emotion decoding, what are the main risks or limitations? Consider subject shift, session shift, label scarcity, noise, dataset scale, and computational cost.
+                    - (4): Give a final recommendation for my research use: directly follow, selectively borrow, or only keep as background reading. State the most reusable idea clearly.
                  Follow the format of the output later: 
                  8. Conclusion: \n\n
                     - (1):xxx;\n                     
-                    - (2):Innovation point: xxx; Performance: xxx; Workload: xxx;\n                      
+                    - (2):Innovation: xxx; Performance: xxx; Robustness/Generalization: xxx; Workload/Reproducibility: xxx;\n
+                    - (3):xxx;\n
+                    - (4):xxx;\n
                  
                  Be sure to use Chinese answers (proper nouns need to be marked in English), statements as concise and academic as possible, do not repeat the content of the previous <summary>, the value of the use of the original numbers, be sure to strictly follow the format, the corresponding content output to xxx, in accordance with \n line feed, ....... means fill in according to the actual requirements, if not, you can not write.                 
                  """
@@ -655,28 +658,32 @@ class Reader:
         clip_text = text[:clip_text_index]
         self.chatPaper.reset(
             convo_id="chatMethod",
-            system_prompt="You are a researcher in the field of [" +
+            system_prompt="You are a researcher specializing in [" +
             self.key_word +
-            "] who is good at summarizing papers using concise statements"
+            "], with strong background in EEG emotion decoding, EEG foundation models, general EEG decoding, time-series modeling, contrastive learning, transfer learning, knowledge distillation, domain adaptation, and domain generalization. You are good at turning paper methods into compact and reusable research notes."
         )  # chatgpt 角色
         self.chatPaper.add_to_conversation(
             convo_id="chatMethod",
             role="assistant",
             message=str(
-                "This is the <summary> and <Method> part of an English document, where <summary> you have summarized, but the <Methods> part, I need your help to read and summarize the following questions."
+                "This is the <summary> and <Method> part of an English paper. The <summary> has already been written. Please focus on the method pipeline, the training objective, the generalization design, and what can transfer to EEG emotion decoding: "
                 + clip_text))
         content = """                 
-                 7. Describe in detail the methodological idea of this article. Be sure to use Chinese answers (proper nouns need to be marked in English). For example, its steps are.
-                    - (1):...
-                    - (2):...
-                    - (3):...
-                    - .......
+                 7. Describe the methodological idea of this article in detail. Be sure to use Chinese answers (proper nouns need to be marked in English).
+                    - (1): What is the input form and preprocessing pipeline? Mention signal type, segmentation/windowing, filtering, augmentation, and whether the representation is raw EEG, handcrafted features, time-frequency maps, graphs, or tokenized sequences when available.
+                    - (2): What is the backbone or encoder architecture? Explain the key temporal, spatial, channel, frequency, graph, or multimodal modeling modules.
+                    - (3): What is the training objective and optimization strategy? Mention classification/regression losses and whether contrastive learning, self-supervised learning, transfer learning, knowledge distillation, domain adaptation, or domain generalization is used.
+                    - (4): What is the complete method pipeline in ordered steps?
+                    - (5): What are the data requirements, computational characteristics, or deployment constraints if the paper mentions them?
+                    - (6): Which parts are most likely to transfer to EEG emotion decoding or cross-subject EEG generalization?
                  Follow the format of the output that follows: 
                  7. Methods: \n\n
                     - (1):xxx;\n 
                     - (2):xxx;\n 
                     - (3):xxx;\n  
-                    ....... \n\n     
+                    - (4):xxx;\n
+                    - (5):xxx;\n
+                    - (6):xxx;\n\n
                  
                  Be sure to use Chinese answers (proper nouns need to be marked in English), statements as concise and academic as possible, do not repeat the content of the previous <summary>, the value of the use of the original numbers, be sure to strictly follow the format, the corresponding content output to xxx, in accordance with \n line feed, ....... means fill in according to the actual requirements, if not, you can not write.                 
                  """
@@ -701,26 +708,28 @@ class Reader:
         clip_text = text[:clip_text_index]
         self.chatPaper.reset(
             convo_id="chatSummary",
-            system_prompt="You are a researcher in the field of [" +
+            system_prompt="You are a researcher specializing in [" +
             self.key_word +
-            "] who is good at summarizing papers using concise statements")
+            "], with strong background in EEG emotion decoding, EEG foundation models, general EEG decoding, time-series modeling, contrastive learning, transfer learning, knowledge distillation, domain adaptation, and domain generalization. You summarize papers concisely, structurally, and critically, and you explicitly judge whether a paper is directly useful, partially transferable, or mainly inspirational for EEG emotion decoding.")
         self.chatPaper.add_to_conversation(
             convo_id="chatSummary",
             role="assistant",
             message=str(
-                "This is the title, author, link, abstract and introduction of an English document. I need your help to read and summarize the following questions: "
+                "This is the title, author, link, abstract and introduction of an English paper. Please read it as a researcher deciding whether the paper is useful for EEG emotion decoding or adjacent EEG/time-series research: "
                 + clip_text))
         content = """                 
                  1. Mark the title of the paper (with Chinese translation)
-                 2. list all the authors' names (use English)
-                 3. mark the first author's affiliation (output Chinese translation only)                 
-                 4. mark the keywords of this article (use English)
-                 5. link to the paper, Github code link (if available, fill in Github:None if not)
-                 6. summarize according to the following four points.Be sure to use Chinese answers (proper nouns need to be marked in English)
-                    - (1):What is the research background of this article?
-                    - (2):What are the past methods? What are the problems with them? Is the approach well motivated?
-                    - (3):What is the research methodology proposed in this paper?
-                    - (4):On what task and what performance is achieved by the methods in this paper? Can the performance support their goals?
+                 2. List all authors' names (use English)
+                 3. Mark the first author's affiliation (output Chinese translation only)                 
+                 4. Mark the keywords of this article (use English)
+                 5. Link to the paper and Github/code link (if available, fill in Github:None if not)
+                 6. Summarize according to the following six points. Be sure to use Chinese answers (proper nouns need to be marked in English)
+                    - (1): What problem does this paper study, and how is it related to EEG emotion decoding, general EEG decoding, or adjacent time-series research?
+                    - (2): What task setting, dataset, evaluation protocol, and subject/session split are used? If the paper is not EEG-specific, state the real task setting clearly.
+                    - (3): What are the representative previous methods and their limitations? Why is the new method needed?
+                    - (4): What is the core methodology of this paper? Pay special attention to time-series modeling, contrastive learning, transfer learning, knowledge distillation, domain adaptation/generalization, or foundation-model style pretraining if they appear.
+                    - (5): What performance is achieved, on which benchmarks or metrics, and are the gains practically meaningful?
+                    - (6): How useful is this paper for my research on EEG emotion decoding? State whether it is directly usable, partially transferable, or mainly inspirational, and explain why.
                  Follow the format of the output that follows:                  
                  1. Title: xxx\n\n
                  2. Authors: xxx\n\n
@@ -731,7 +740,9 @@ class Reader:
                     - (1):xxx;\n 
                     - (2):xxx;\n 
                     - (3):xxx;\n  
-                    - (4):xxx.\n\n     
+                    - (4):xxx;\n
+                    - (5):xxx;\n
+                    - (6):xxx.\n\n     
                  
                  Be sure to use Chinese answers (proper nouns need to be marked in English), statements as concise and academic as possible, do not have too much repetitive information, numerical values using the original numbers, be sure to strictly follow the format, the corresponding content output to xxx, in accordance with \n line feed.                 
                  """

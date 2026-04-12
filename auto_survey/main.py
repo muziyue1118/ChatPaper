@@ -76,7 +76,7 @@ def _generation_setup(title,  template="Default",
         except Exception as e:
             domain_knowledge=''
     prompts = f"Title: {title}"
-    syetem_promot =  "You are an assistant designed to propose necessary components of an survey papers. Your response should follow the JSON format."
+    syetem_promot =  "You are an assistant designed to propose necessary components of a survey paper. Your response should follow the JSON format. Prefer components that are useful for EEG emotion decoding, general EEG decoding, EEG foundation models, time-series analysis, contrastive learning, transfer learning, knowledge distillation, domain adaptation, and domain generalization when relevant."
     components, usage = llm(systems=syetem_promot, prompts=prompts, return_json=True)
     log_usage(usage, "media")
     print(f"The paper information has been initialized. References are saved to {bibtex_path}.")
@@ -90,7 +90,7 @@ def _generation_setup(title,  template="Default",
     return paper, destination_folder, all_paper_ids
 
 
-def section_generation(paper, section, save_to_path, model, research_field="machine learning"):
+def section_generation(paper, section, save_to_path, model, research_field="EEG emotion decoding, EEG foundation models, EEG decoding, time-series analysis, contrastive learning, transfer learning, knowledge distillation, domain adaptation, domain generalization"):
     """
     The main pipeline of generating a section.
         1. Generate prompts.
@@ -103,7 +103,7 @@ def section_generation(paper, section, save_to_path, model, research_field="mach
     title = paper["title"]
     references = paper["references"]
     components = paper['components']
-    instruction = '- Discuss three to five main related fields to this paper. For each field, select five to ten key publications from references. For each reference, analyze its strengths and weaknesses in one or two sentences. Present the related works in a logical manner, often chronologically. Consider using a taxonomy or categorization to structure the discussion. Do not use \section{...} or \subsection{...}; use \paragraph{...} to list related fields.'
+    instruction = '- Discuss three to five main related fields to this paper. For each field, select five to ten key publications from references. For each reference, analyze its strengths and weaknesses in one or two sentences. Present the related works in a logical manner, often chronologically. Consider using a taxonomy or categorization to structure the discussion. If the topic is related to EEG, BCI, affective computing, or time-series learning, pay special attention to datasets, subject/session split, preprocessing, representation learning, cross-subject generalization, domain adaptation/generalization, transfer learning, contrastive learning, and knowledge distillation. Do not use \section{...} or \subsection{...}; use \paragraph{...} to list related fields.'
 
 
     fundamental_subprompt = "Your task is to write the {section} section of the paper with the title '{title}'. This paper has the following content: {components}\n"
@@ -131,7 +131,7 @@ def section_generation(paper, section, save_to_path, model, research_field="mach
                                     section=section,
                                     references=references)
     SECTION_GENERATION_SYSTEM = PromptTemplate(input_variables=["research_field"],
-                                               template="You are an assistant designed to write academic papers in the field of {research_field} using LaTeX." )
+                                               template="You are an assistant designed to write academic papers in the field of {research_field} using LaTeX. When the topic is relevant, write from the perspective of an EEG/time-series researcher and explicitly compare datasets, protocols, generalization settings, and transferable methodological ideas." )
     output, usage = get_gpt_responses(SECTION_GENERATION_SYSTEM.format(research_field=research_field), prompts,
                                       model=model, temperature=0.4)
 
@@ -143,8 +143,8 @@ def section_generation(paper, section, save_to_path, model, research_field="mach
     use_md =True
     use_chinese = True
     if use_md:
-        system_md = 'You are an translator between the  LaTeX and .MD. here is a latex file where the content is: \n \n ' + output
-        prompts_md = 'you should transfer the latex content to the .MD format seriously, and pay attention to the correctness of the citation format (use the number). you should directly output the new content without anyoter replay. you should add reference papers at the end of the paper, and add line breaks between two reference papers. The Title should be ' + paper['title']
+        system_md = 'You are a translator between LaTeX and Markdown for academic writing in EEG and machine learning. Here is a latex file where the content is: \n \n ' + output
+        prompts_md = 'Transfer the LaTeX content to Markdown faithfully. Pay attention to citation correctness (use numeric citations), preserve technical terminology, and directly output the converted content without any extra explanation. Add reference papers at the end of the paper, and add line breaks between two reference papers. The title should be ' + paper['title']
         output_md, usage_md = get_gpt_responses(system_md, prompts_md,
                                           model=model, temperature=0.4)
         md_file = os.path.join(save_to_path, f"{'survey'}.md")
@@ -152,8 +152,8 @@ def section_generation(paper, section, save_to_path, model, research_field="mach
             m.write(output_md)
 
         if use_chinese == True:
-            system_md_chi = 'You are an translator between the  english and chinese. here is a english file where the content is: \n \n ' + output
-            prompts_md_chi = 'you should transfer the english to chinese and dont change anything others. you should directly output the new content without anyoter replay. you should keep the reference papers unchanged.'
+            system_md_chi = 'You are a translator between English and Chinese for academic writing in EEG and machine learning. Here is an English file where the content is: \n \n ' + output
+            prompts_md_chi = 'Translate the English into Chinese faithfully and keep technical terminology, dataset names, method names, and citations unchanged. Directly output the translated content without any extra explanation. Keep the reference papers unchanged.'
 
             output_md_chi, usage_md_chi = get_gpt_responses(system_md_chi, prompts_md_chi,
                                                     model=model, temperature=0.4)
