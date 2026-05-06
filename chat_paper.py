@@ -50,6 +50,7 @@ except ImportError:
     Image = None
 
 from paper_sources import (
+    configure_arxiv_https_endpoint,
     download_candidate_pdf,
     partition_candidates,
     render_reading_list_markdown,
@@ -417,6 +418,7 @@ class Reader:
         self.export_stem = self.build_export_stem(args)
 
     def get_arxiv(self, max_results=30):
+        configure_arxiv_https_endpoint()
         search = arxiv.Search(query=self.query,
                               max_results=max_results,
                               sort_by=self.sort,

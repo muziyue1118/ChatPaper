@@ -14,6 +14,8 @@ import requests
 IEEE_SEARCH_URL = "https://ieeexploreapi.ieee.org/api/v1/search/articles"
 ELSEVIER_SCOPUS_URL = "https://api.elsevier.com/content/search/scopus"
 ELSEVIER_SCIENCEDIRECT_URL = "https://api.elsevier.com/content/search/sciencedirect"
+ARXIV_HTTP_QUERY_PREFIX = "http://export.arxiv.org/"
+ARXIV_HTTPS_QUERY_URL_FORMAT = "https://export.arxiv.org/api/query?{}"
 
 
 @dataclass
@@ -37,6 +39,17 @@ class SearchResponse:
     source: str
     candidates: List[SearchCandidate] = field(default_factory=list)
     errors: List[str] = field(default_factory=list)
+
+
+def configure_arxiv_https_endpoint() -> None:
+    if arxiv is None:
+        return
+    client_cls = getattr(arxiv, "Client", None)
+    if client_cls is None:
+        return
+    query_url_format = getattr(client_cls, "query_url_format", "")
+    if isinstance(query_url_format, str) and query_url_format.startswith(ARXIV_HTTP_QUERY_PREFIX):
+        client_cls.query_url_format = ARXIV_HTTPS_QUERY_URL_FORMAT
 
 
 def sanitize_filename(text: str, default: str = "paper") -> str:
@@ -287,6 +300,7 @@ def search_papers(
 def search_arxiv(query: str, max_results: int, sort: Optional[Any] = None) -> List[SearchCandidate]:
     if arxiv is None:
         raise RuntimeError("The 'arxiv' package is not installed.")
+    configure_arxiv_https_endpoint()
     search = arxiv.Search(
         query=query,
         max_results=max(max_results * 3, max_results),

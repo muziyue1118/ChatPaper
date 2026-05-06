@@ -8,8 +8,10 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+import paper_sources  # noqa: E402
 from paper_sources import (  # noqa: E402
     SearchCandidate,
+    configure_arxiv_https_endpoint,
     dedupe_candidates,
     filter_candidates,
     normalize_day_window,
@@ -19,6 +21,16 @@ from paper_sources import (  # noqa: E402
 
 
 class PaperSourcesTest(unittest.TestCase):
+    def with_fake_arxiv_client(self, query_url_format):
+        class FakeClient:
+            pass
+
+        class FakeArxiv:
+            Client = FakeClient
+
+        FakeClient.query_url_format = query_url_format
+        return FakeArxiv
+
     def make_candidate(self, **overrides):
         payload = {
             "source": "ieee",
@@ -35,6 +47,26 @@ class PaperSourcesTest(unittest.TestCase):
         }
         payload.update(overrides)
         return SearchCandidate(**payload)
+
+    def test_configure_arxiv_https_endpoint_upgrades_http_endpoint(self):
+        original_arxiv = paper_sources.arxiv
+        fake_arxiv = self.with_fake_arxiv_client("http://export.arxiv.org/api/query?{}")
+        try:
+            paper_sources.arxiv = fake_arxiv
+            configure_arxiv_https_endpoint()
+            self.assertEqual(fake_arxiv.Client.query_url_format, "https://export.arxiv.org/api/query?{}")
+        finally:
+            paper_sources.arxiv = original_arxiv
+
+    def test_configure_arxiv_https_endpoint_keeps_https_endpoint(self):
+        original_arxiv = paper_sources.arxiv
+        fake_arxiv = self.with_fake_arxiv_client("https://export.arxiv.org/api/query?{}")
+        try:
+            paper_sources.arxiv = fake_arxiv
+            configure_arxiv_https_endpoint()
+            self.assertEqual(fake_arxiv.Client.query_url_format, "https://export.arxiv.org/api/query?{}")
+        finally:
+            paper_sources.arxiv = original_arxiv
 
     def test_filter_candidates_uses_title_and_abstract(self):
         candidates = [
